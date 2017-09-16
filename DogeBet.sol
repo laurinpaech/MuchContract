@@ -1,6 +1,8 @@
 pragma solidity ^0.4.8;
 
 import "./oraclizeAPI_0.4.sol";
+import "./strings.sol";
+import "./DateTime.sol";
 
 contract DogeBet {
 
@@ -25,7 +27,7 @@ contract DogeBet {
             throw;
         }
         // return is contractaddress?
-        address newBet = new WinLoseTieBet(msg.value[0],); // matchID, Id of team
+        address newBet = new WinLoseTieBet(msg.value); // matchID, Id of team
         // save contractaddress in mapping with ID
         bets[msg.value] = newBet;
         NewBet(msg.value, newBet);
@@ -39,25 +41,36 @@ contract DogeBet {
 
 
 contract WinLoseTieBet is usingOraclize {
+    using strings for *;
 
     address public creator;
+    uint public houseEdge = 0.02; // 2 percent to the house
     uint public matchID;
 
-    uint timeQueryID;
-    uint finishedQueryID;
-    uint winningQueryID;
+    bytes32 timeQueryID;
+    bytes32 finishedQueryID;
+    bytes32 winningQueryID;
+    bytes32 scoreTeam1QueryID;
+    bytes32 scoreTeam2QueryID;
 
     // 0 is Tie, 1 is Team 1 wins and 2 is Team 2 wins
     mapping (uint => mapping (address => uint)) bids;
+    address[] betters;
 
     uint startTime;
-    uint result;
+    uint winner;
+
+    string scoreTeam1;
+    string scoreTeam2;
+    bool finalScore1;
+    bool finalScore2;
+    string finished;
 
     uint public totalBalance1   = 0; // balance of all bets on "win" teamA
     uint public totalBalance2   = 0; // balance of all bets on "win" teamB
     uint public totalBalanceTie = 0; // balance of all bets on ""
 
-    function WinLoseTieBet(uint _matchID, uint _id) {
+    function WinLoseTieBet(uint _matchID) {
         // shit doesnt work this way (?) but anyway just testnet yo
         creator = msg.sender;
         OAR = OraclizeAddrResolverI(0x51efaf4c8b3c9afbd5ab9f4bbc82784ab6ef8faa);
@@ -65,7 +78,6 @@ contract WinLoseTieBet is usingOraclize {
 
         matchID = _matchID;
         // does first bet work?
-        bid(_id);
 
         initialize();
     }
@@ -75,13 +87,14 @@ contract WinLoseTieBet is usingOraclize {
         // Time UTC <MatchDateTimeUTC>2016-11-19T17:30:00Z</MatchDateTimeUTC>
         timeQueryID    = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchDateTimeUTC");
         // Finished?
-        finishedQueryID = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchIsFinished");
+        // finishedQueryID = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchIsFinished");
     }
 
-    function parseTime(string time) internal returns (uint){
+    function parseTime(string time) returns (uint){
 
         // uses https://github.com/Arachnid/solidity-stringutils
         var slicedTime = time.toSlice();
+        /*
         // slicedTime: 2016-11-19T17:30:00Z
         uint16 years = parseInt((slicedTime.split("-".toSlice())).toString());
         // year: 2016, slicedTime: 11-19T17:30:00Z
@@ -99,6 +112,7 @@ contract WinLoseTieBet is usingOraclize {
         // convert everything to unix epoch aka "seconds since Jan 01 1970"
         // using https://github.com/pipermerriam/ethereum-datetime
         return toTimestamp(years, months, days, hours, minutes, seconds);
+        */
     }
 
     // pay Ether + Fees
@@ -109,14 +123,15 @@ contract WinLoseTieBet is usingOraclize {
         require(now <= startTime);
 
         // Sanity Check
-        if(_id < 0 && 2 < _id && msg.value <= 0){
+        if(_id < 0 && 2 < _id && msg.value <= 0.0){
             throw;
         }
 
-        bids[_id][msg.address] += msg.value;
+        bids[_id][msg.sender] += msg.value;
+        betters.push(msg.sender);
 
         // Bets on tie
-        if (_id == 0) {
+        if (_id == 0){
             totalBalanceTie += msg.value;
 
         // Bets on Team 1
@@ -131,12 +146,63 @@ contract WinLoseTieBet is usingOraclize {
 
     }
 
-    function payout() {
+    function payoff() internal{
+        uint totalPayoff;
+        uint payoutBalance;
+        uint collectedFees;
 
-    }
+        address better;
+        uint amount;
+        uint winAmount;
+        uint idx;
 
-    function betResult() constant returns (string) {
-        return result;
+        if (winner == 0) {
+
+            totalPayoff = totalBalance1 + totalBalance2;
+            payoutBalance = totalPayoff * (1 - houseEdge);
+            collectedFees = totalPayoff * houseEdge;
+
+            for (idx = 0; idx < betters.length; idx += 1) {
+
+                better = betters[idx];
+                amount = bids[0][better];
+                // what he gave + the his
+                winAmount = amount + ((amount / totalBalanceTie) * totalPayoff);
+                better.send(winAmount);
+            }
+
+        } else if (winner == 1){
+
+            totalPayoff = totalBalanceTie + totalBalance2;
+            payoutBalance = totalPayoff * (1 - houseEdge);
+            collectedFees = totalPayoff * houseEdge;
+
+            for (idx = 0; idx < betters.length; idx += 1) {
+
+                better = betters[idx];
+                amount = bids[1][better];
+                // what he gave + the his
+                winAmount = amount + ((amount / totalBalance1) * totalPayoff);
+                better.send(winAmount);
+            }
+
+        } else if (winner == 2) {
+
+            totalPayoff = totalBalanceTie + totalBalance2;
+            payoutBalance = totalPayoff * (1 - houseEdge);
+            collectedFees = totalPayoff * houseEdge;
+
+            for (idx = 0; idx < betters.length; idx += 1) {
+
+                better = betters[idx];
+                amount = bids[1][better];
+                // what he gave + the his
+                winAmount = amount + ((amount / totalBalance1) * totalPayoff);
+                better.send(winAmount);
+            }
+
+        }
+
     }
 
 
@@ -147,28 +213,42 @@ contract WinLoseTieBet is usingOraclize {
             startTime = parseTime(result);
         } else if (id == finishedQueryID){
             finished = result;
-        } else{
-
-            // Game is finished
-            if (finished == "true") {
-                // Tie
-                if (scoreTeam1 == scoreTeam2){
-                    result = "Tie";
-                }else if (scoreTeam2){
-
-                }else if (){
-
-                }
-
-
-            }else{
-
-            }
+        } else if (id == scoreTeam1QueryID){
+            scoreTeam1 = result;
+            finalScore1 = true;
+        } else if (id == scoreTeam2QueryID){
+            scoreTeam2 = result;
+            finalScore1 = true;
         }
+
+        // Game is finished
+        if (finished == "true" && !finalScore1 && !finalScore2) {
+
+            // PointsTeam1
+            scoreTeam1QueryID = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchResults.1.PointsTeam1");
+            // PointsTeam2
+            scoreTeam2QueryID = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchResults.1.PointsTeam2");
+
+        }else if(finished == "true" && finalScore1 && finalScore2){
+            // Tie
+            if (scoreTeam1 == scoreTeam2){
+                winner = 0;
+            // Team 1 won
+            }else if (scoreTeam1 > scoreTeam2){
+                winner = 1;
+            // Team 2 won
+            }else {
+                winner = 2;
+            }
+        }else{
+            update();
+        }
+
     }
 
-    function update() payable {
-        scoreTeam1QueryID = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchResults.1.PointsTeam1");
-        scoreTeam2QueryID = oraclize_query("URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchResults.1.PointsTeam2");
+    function update() payable internal{
+
+        // Finished?
+        finishedQueryID = oraclize_query(900, "URL", "json(https://www.openligadb.de/api/getmatchdata/39738).Match.MatchIsFinished");
     }
 }
