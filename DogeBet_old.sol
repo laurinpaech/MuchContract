@@ -68,15 +68,11 @@ contract WinLoseTieBet is usingOraclize {
     string api1;
     string api2;
 
-    bytes32 shaFalse = sha3("false");
-    bytes32 shaTrue = sha3("true");
-
-    uint public scoreTeam1;
-    uint public scoreTeam2;
+    string public scoreTeam1;
+    string public scoreTeam2;
     bool finalScore1;
     bool finalScore2;
     string public finished;
-    bytes32 shaFinished;
 
     uint public totalBalance1   = 0; // balance of all bets on "win" teamA
     uint public totalBalance2   = 0; // balance of all bets on "win" teamB
@@ -91,7 +87,6 @@ contract WinLoseTieBet is usingOraclize {
         matchID = _matchID;
         strMatchID = uint2str(_matchID);
         api = strConcat(api1, strMatchID);
-        shaFinished = shaFalse;
 
         initialized = false;
     }
@@ -142,22 +137,6 @@ contract WinLoseTieBet is usingOraclize {
 
     }
 
-    function withdrawal(){
-
-        if (shaFinished == shaFalse){
-
-            // first to make it finished? -> update scores + who won
-            var str = strConcat(api, ").MatchIsFinished");
-            finishedQueryID = oraclize_query("URL", str);
-            validIds[finishedQueryID] = true;
-        }else{
-
-            // game is finished -> pay out all betters
-            payoff();
-        }
-
-    }
-
     function payoff() internal{
         uint totalPayoff;
         uint payoutBalance;
@@ -167,17 +146,6 @@ contract WinLoseTieBet is usingOraclize {
         uint amount;
         uint winAmount;
         uint idx;
-
-        // Tie
-        if (scoreTeam1 == scoreTeam2){
-            winner = 0;
-        // Team 1 won
-        }else if (scoreTeam1 > scoreTeam2){
-            winner = 1;
-        // Team 2 won
-        }else {
-            winner = 2;
-        }
 
         if (winner == 0) {
 
@@ -228,6 +196,7 @@ contract WinLoseTieBet is usingOraclize {
 
     }
 
+
     function __callback(bytes32 id, string result) {
         if (!validIds[id]) throw;
         if (msg.sender != oraclize_cbAddress()) throw;
@@ -237,49 +206,52 @@ contract WinLoseTieBet is usingOraclize {
             startTime = parseTime(result);
         } else if (id == finishedQueryID){
             finished = result;
-            shaFinished = sha3(result);
-
-            /*
-             if finished -> get stats
-             if not finished -> get finished status in 900 seconds
-            */
-            update();
-
+            if(sha3(finished) == sha3("false")){
+                update();
+            }
         } else if (id == scoreTeam1QueryID){
-            scoreTeam1 = parseInt(result);
+            scoreTeam1 = result;
             finalScore1 = true;
-
         } else if (id == scoreTeam2QueryID){
-            scoreTeam2 = parseInt(result);
-            finalScore2 = true;
+            scoreTeam2 = result;
+            finalScore1 = true;
         }
 
-        if (finalScore1 && finalScore2){
-            payoff();
-        }
+        // Game is finished
+        if (sha3(finished) == sha3("true") && !finalScore1 && !finalScore2) {
 
-        delete validIds[id];
-    }
-
-    function update() {
-
-        if (shaFinished == shaTrue){
             // PointsTeam1
             var str = strConcat(api, ").MatchResults.1.PointsTeam1");
             scoreTeam1QueryID = oraclize_query("URL", str);
             validIds[scoreTeam1QueryID] = true;
-
             // PointsTeam2
             str = strConcat(api, ").MatchResults.1.PointsTeam2");
             scoreTeam2QueryID = oraclize_query("URL", str);
             validIds[scoreTeam2QueryID] = true;
 
-        }else{
-            // Finished?
-            var str2 = strConcat(api, ").MatchIsFinished");
-            finishedQueryID = oraclize_query(900, "URL", str2);
-            validIds[finishedQueryID] = true;
+        }else if(sha3(finished) == sha3("true") && finalScore1 && finalScore2){
+            // Tie
+            if (sha3(scoreTeam1) == sha3(scoreTeam2)){
+                winner = 0;
+            // Team 1 won
+            }else if (sha3(scoreTeam1) > sha3(scoreTeam2)){
+                winner = 1;
+            // Team 2 won
+            }else {
+                winner = 2;
+            }
+            // payoff();
         }
+        
+        delete validIds[id];
+    }
+
+    function update() payable{
+        counter += 1;
+        // Finished?
+        var str = strConcat(api, ").MatchIsFinished");
+        finishedQueryID = oraclize_query(120, "URL", str);
+        validIds[finishedQueryID] = true;
     }
 
 
